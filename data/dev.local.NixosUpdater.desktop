@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=NixOS Updater
+Comment=Flake update, rebuild and switch
+Exec=nixos-updater
+Icon=dev.local.NixosUpdater
+Categories=System;Settings;

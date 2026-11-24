@@ -1,0 +1,59 @@
+# NixOS Updater
+
+GTK4 / libadwaita front end for **flake update → build → switch**.
+
+## Run
+    nix run .                 # build and run
+    nix develop               # then: python -m nixos_updater   (runs from source)
+    python -m nixos_updater --check    # open and check immediately
+
+NixOS module (installs the app, plus an optional background timer):
+
+    inputs.nixos-updater.url = "path:/home/you/nixos-updater";   # or git
+    # in your configuration:
+    imports = [ inputs.nixos-updater.nixosModules.default ];
+    programs.nixos-updater = {
+      enable = true;
+      # optional; anything you set here is fixed and greyed out in the window:
+      # autoUpdate = true;  autoBuild = true;  checkFrequency = "daily";  # daily | weekly | monthly  directory = "/home/you/nixos-config";
+    };
+
+## Where things live
+| File | What it is |
+|---|---|
+| `nixos_updater/config.py` | Settings (JSON in `~/.config/nixos-updater/`), default commands, schedules |
+| `nixos_updater/engine.py` | No GTK. Reads flake.lock/generation/kernel, runs the pipeline on a worker thread |
+| `nixos_updater/window.py` | All UI. One `_build_*` method per section, one `render()` that copies engine state to widgets |
+| `nixos_updater/background.py` | The unattended run (`--scheduled`): no window, sends the notification |
+| `nixos_updater/__main__.py` | CLI flags (`--check`, `--scheduled`, `--prompt`) |
+| `nix/package.nix`, `nix/module.nix`, `flake.nix` | Packaging, NixOS module, dev shell |
+| `tests/test_engine.py` | `python -m unittest discover tests` (needs only Python) |
+
+## How it behaves
+- **Check for Updates** = update command → if flake.lock changed, build → offer switch dialog.
+  **Rebuild** = build only. **Rebuild & Switch** = build → offer switch dialog.
+  Switch dialog: *Switch now* / *On next boot* (rewrites `nixos-rebuild switch` to `boot`) / *Not now*.
+- **"Updated" inputs** = flake.lock differs from `~/.local/state/nixos-updater/flake.lock.switched`,
+  a copy taken after every successful switch (the first run assumes your current lock is what you're running).
+  **Roll Back** restores that copy (default command: `sudo cp <snapshot> flake.lock`).
+- **sudo**: there is no terminal, so commands run under bash with `sudo` redefined as `sudo -S -p ""`.
+  The app asks for your password once in a dialog, keeps it in memory only, and feeds it on stdin.
+  Wrong password → it asks again next run.
+- Edited commands are stored; un-edited ones follow the working directory and hostname.
+- **Garbage collection** runs after a successful switch when it's due (`sudo nix-collect-garbage --delete-older-than Nd`).
+- **Background checks** (`--scheduled`, run by the module's user timer every hour): the app exits at once unless a
+  check is due per Update Frequency. If it is, it runs with **no window**: update, then build if *Build After Updating*
+  is on. Then it sends a notification (silent if nothing changed): "Ready to switch", "Flake updated", or
+  "Update failed". Clicking it opens the window on the confirm-switch dialog, or on "Rebuild & Switch?" if only the update ran (`--prompt`). With *Build After Updating* off, the background run only updates `flake.lock` (no password needed); the build and switch happen in the window, with your password.
+  It never switches by itself.
+- Background runs have nobody to ask for a password, so `sudo` is skipped there (the command runs as you). Update and
+  build don't need root. If your flake.lock is root-owned from earlier `sudo nix flake update` runs, fix it once:
+  `sudo chown $USER flake.lock`.
+- A finished build is remembered (`~/.local/state/nixos-updater/pending.json` + `./result`), so opening the window
+  later, or after a notification, shows "Ready to Switch" with the confirm dialog. It is discarded if flake.lock changes.
+- The window and the background run can't work at the same time (a lock file); the background run just skips.
+- **Build After Updating** (on by default): Check for Updates = update, then build if anything changed, then confirm
+  the switch. Off: Check stops at "Updates Available"; Rebuild / Rebuild & Switch build on request. Every finished
+  build from a check or Rebuild & Switch ends in the confirm-switch dialog.
+- Needs `notify-send` (libnotify >= 0.8 for clickable notifications); the package puts it on PATH.
+- Needs libadwaita >= 1.5 (AlertDialog, AboutDialog) and GTK >= 4.12.
