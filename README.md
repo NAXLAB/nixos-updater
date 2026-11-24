@@ -9,13 +9,16 @@ GTK4 / libadwaita front end for **flake update → build → switch**.
 
 NixOS module (installs the app, plus an optional background timer):
 
-    inputs.nixos-updater.url = "path:/home/you/nixos-updater";   # or git
+    inputs.nixos-updater.url = "github:NAXLAB/nixos-updater"; 
     # in your configuration:
     imports = [ inputs.nixos-updater.nixosModules.default ];
     programs.nixos-updater = {
       enable = true;
       # optional; anything you set here is fixed and greyed out in the window:
-      # autoUpdate = true;  autoBuild = true;  checkFrequency = "daily";  # daily | weekly | monthly  directory = "/home/you/nixos-config";
+      # autoUpdate = true;
+      autoBuild = true;
+      checkFrequency = "daily";  # daily | weekly | monthly 
+      directory = "/home/you/nixos-config";
     };
 
 ## Where things live
