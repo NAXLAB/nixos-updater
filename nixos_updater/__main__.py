@@ -14,9 +14,14 @@ def main():
     p.add_argument("--prompt", action="store_true",
                    help="open the window on the pending confirm-switch / confirm-build dialog "
                         "(used when a notification is clicked)")
+    p.add_argument("--run", metavar="JOB", help=argparse.SUPPRESS)   # internal: the detached job runner
+    p.add_argument("--job-id", help=argparse.SUPPRESS)
     args = p.parse_args()
 
     cfg = Config.load()
+    if args.run:
+        from .runner import main as run_job   # no GTK needed
+        return run_job(cfg, args.run, args.job_id or "manual")
     if args.scheduled:
         if not cfg.check_due():
             return 0

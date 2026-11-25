@@ -9,16 +9,13 @@ GTK4 / libadwaita front end for **flake update → build → switch**.
 
 NixOS module (installs the app, plus an optional background timer):
 
-    inputs.nixos-updater.url = "github:NAXLAB/nixos-updater"; 
+    inputs.nixos-updater.url = "path:/home/you/nixos-updater";   # or git
     # in your configuration:
     imports = [ inputs.nixos-updater.nixosModules.default ];
     programs.nixos-updater = {
       enable = true;
       # optional; anything you set here is fixed and greyed out in the window:
-      # autoUpdate = true;
-      autoBuild = true;
-      checkFrequency = "daily";  # daily | weekly | monthly 
-      directory = "/home/you/nixos-config";
+      # autoUpdate = true;  autoBuild = true;  checkFrequency = "daily";  # daily | weekly | monthly  directory = "/home/you/nixos-config";
     };
 
 ## Where things live
@@ -26,7 +23,10 @@ NixOS module (installs the app, plus an optional background timer):
 |---|---|
 | `nixos_updater/config.py` | Settings (JSON in `~/.config/nixos-updater/`), default commands, schedules |
 | `nixos_updater/engine.py` | No GTK. Reads flake.lock/generation/kernel, runs the pipeline on a worker thread |
-| `nixos_updater/window.py` | All UI. One `_build_*` method per section, one `render()` that copies engine state to widgets |
+| `nixos_updater/runner.py` | The detached job runner (`--run`, started by the window). Runs the engine, publishes its state, and brings the next step to you if the window is closed |
+| `nixos_updater/remote.py` | The window's view of the engine: starts/cancels the runner and polls its state |
+| `nixos_updater/runstate.py` | The files runner and window share (`run.json`, `run.log`, `window.lock`) |
+| `nixos_updater/window.py` | All UI. One `_build_*` method per section, one `render()` that copies engine state to widgets. It only watches the runner |
 | `nixos_updater/background.py` | The unattended run (`--scheduled`): no window, sends the notification |
 | `nixos_updater/__main__.py` | CLI flags (`--check`, `--scheduled`, `--prompt`) |
 | `nix/package.nix`, `nix/module.nix`, `flake.nix` | Packaging, NixOS module, dev shell |
@@ -58,5 +58,13 @@ NixOS module (installs the app, plus an optional background timer):
 - **Build After Updating** (on by default): Check for Updates = update, then build if anything changed, then confirm
   the switch. Off: Check stops at "Updates Available"; Rebuild / Rebuild & Switch build on request. Every finished
   build from a check or Rebuild & Switch ends in the confirm-switch dialog.
+- **Jobs run detached.** A job from the window (check, rebuild, switch, roll back) runs in its own process
+  (`nixos-updater --run`), so closing the window does not stop it; the window only watches `run.json`/`run.log`
+  in `~/.local/state/nixos-updater/`, and Cancel signals the runner. The sudo password is handed to the runner on
+  stdin (never written to disk) and is asked for again after the window is reopened.
+- **When the window is closed, the runner brings the next step to you.** Build finished or update found: it opens
+  the window on the Rebuild & Switch / Switch dialog. Switch finished: a notification only (with a restart note if
+  the kernel changed). Failure: a notification; clicking it opens the window. If the window is open, it shows the
+  dialog itself.
 - Needs `notify-send` (libnotify >= 0.8 for clickable notifications); the package puts it on PATH.
 - Needs libadwaita >= 1.5 (AlertDialog, AboutDialog) and GTK >= 4.12.

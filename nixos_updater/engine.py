@@ -161,6 +161,7 @@ class Engine:
         self.s = State()
         self.thread = None
         self.busy = False            # last start() was refused: another run holds the run lock
+        self.password_rejected = False   # sudo said the password was wrong (the window forgets its copy)
         self._built_lock = None      # hash of the flake.lock the waiting build was made from
         self._password = None
         self._proc = None
@@ -228,6 +229,7 @@ class Engine:
         s.error, s.steps, s.log, s.progress = None, {}, [], None
         self._cancel = False
         self.busy = False
+        self.password_rejected = False
         offer = False
         t0 = time.time()
         run_lock = self._acquire_run_lock()
@@ -391,6 +393,7 @@ class Engine:
                 continue
             if "incorrect password" in line or "Sorry, try again" in line:
                 self._password = None   # ask again next time
+                self.password_rejected = True
             if m := BUILD_PROGRESS.search(line):
                 s.progress = (int(m.group(1)), int(m.group(2)))
             s.log.append(line)

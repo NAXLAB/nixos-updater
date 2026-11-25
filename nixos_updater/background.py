@@ -14,12 +14,18 @@ from .engine import Engine
 NOTIFY_WAIT = 12 * 3600   # how long to wait for a click before giving up
 
 
-def notify(title, body):
+def notify(title, body, clickable=True):
     """Show a notification. Returns True if the user clicked it (needs libnotify >= 0.8 for --action)."""
     exe = shutil.which("notify-send")
     if not exe:
         return False
     base = [exe, "--app-name=NixOS Updater", "--icon=dev.local.NixosUpdater"]
+    if not clickable:
+        try:
+            subprocess.run(base + [title, body], capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return False
     try:
         r = subprocess.run(base + ["--action=default=Open", "--wait", title, body],
                            capture_output=True, text=True, timeout=NOTIFY_WAIT)
@@ -29,6 +35,12 @@ def notify(title, body):
     except (OSError, subprocess.SubprocessError):
         return False
     return r.stdout.strip() == "default"
+
+
+def open_ui():
+    """Open the window on the pending confirm dialog, and carry on (the window outlives us)."""
+    subprocess.Popen([sys.executable, "-m", "nixos_updater", "--prompt"], start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def launch_ui():

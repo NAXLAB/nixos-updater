@@ -1,11 +1,11 @@
 """The GTK4 / libadwaita UI. Layout mirrors the prototype, top to bottom:
 status card, flake inputs, working directory, update pipeline, roll back, garbage collection.
 
-Flow: buttons call engine.start(job) -> the engine's worker thread changes engine.s and
-calls _on_change -> render() (on the UI thread) copies engine.s onto the widgets.
+Flow: buttons call engine.start(job), which launches a detached runner process (runner.py). The window
+only watches: every 250 ms it asks the engine (remote.py) to re-read the runner's state from disk and, if
+anything changed, render() copies engine.s onto the widgets. Closing the window does not stop a job.
 """
 import re
-import threading
 import time
 from pathlib import Path
 
@@ -16,7 +16,8 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, GObject, Gtk, Pango  # noqa: E402
 
 from .config import CHECK_FREQUENCIES, GC_DAYS, GC_FREQUENCIES, default_commands  # noqa: E402
-from .engine import Engine  # noqa: E402
+from . import runstate  # noqa: E402
+from .remote import Remote  # noqa: E402
 
 CSS = """
 /* status card: tinted by tone, built from libadwaita's own colours so light/dark both work */
@@ -140,9 +141,8 @@ class Window(Adw.ApplicationWindow):
     def __init__(self, app, cfg, auto_check=False, prompt=False):
         super().__init__(application=app, title="NixOS Updater", default_width=640, default_height=900)
         self.cfg = cfg
-        self.engine = Engine(cfg, self._on_change, self._ask_password,
-                             lambda: GLib.idle_add(self._show_switch_dialog))
-        self._render_pending = False
+        self.window_lock = runstate.hold_window_lock()   # tells the runner a window is open
+        self.engine = Remote(cfg, self._ask_password, self._show_switch_dialog)
         self._log_shown = 0
         self._pulse_id = 0
         self._inputs_sig = None
@@ -170,6 +170,7 @@ class Window(Adw.ApplicationWindow):
         self.set_content(view)
 
         self.render()
+        GLib.timeout_add(250, self._poll)
         if auto_check:
             GLib.idle_add(lambda: self.engine.start("check"))
         if prompt:
@@ -255,7 +256,8 @@ class Window(Adw.ApplicationWindow):
         self.log_buffer = Gtk.TextBuffer()
         self.log_tags = {name: self.log_buffer.create_tag(name) for name in ("green", "blue", "red")}
         self.log_view = Gtk.TextView(buffer=self.log_buffer, editable=False, cursor_visible=False,
-                                     wrap_mode=Gtk.WrapMode.WORD_CHAR, css_classes=["terminal"])
+                                     wrap_mode=Gtk.WrapMode.WORD_CHAR, css_classes=["terminal"],
+                                     left_margin=14, right_margin=14, top_margin=10, bottom_margin=10)
         log_scroll = Gtk.ScrolledWindow(child=self.log_view, min_content_height=240, max_content_height=280,
                                         propagate_natural_height=True, css_classes=["term-log"])
         self.log_revealer = Gtk.Revealer(child=log_scroll, transition_duration=280,
@@ -486,16 +488,11 @@ class Window(Adw.ApplicationWindow):
     # ====================================================================
     # Rendering: engine state -> widgets. Always on the UI thread.
     # ====================================================================
-    def _on_change(self):
-        """Called from any thread. Coalesces bursts of output into one redraw."""
-        if not self._render_pending:
-            self._render_pending = True
-            GLib.idle_add(self._render_idle)
-
-    def _render_idle(self):
-        self._render_pending = False
-        self.render()
-        return GLib.SOURCE_REMOVE
+    def _poll(self):
+        """Re-read the runner's state; redraw only if something changed."""
+        if self.engine.poll():
+            self.render()
+        return GLib.SOURCE_CONTINUE
 
     def render(self):
         s = self.engine.s
@@ -601,16 +598,10 @@ class Window(Adw.ApplicationWindow):
         self.last_line.set_markup(markup)
 
     # ====================================================================
-    # Dialogs: sudo password (called from the worker thread) and "switch now?"
+    # Dialogs: sudo password and "switch now?"
     # ====================================================================
-    def _ask_password(self):
-        """Runs on the worker thread: shows the dialog on the UI thread and waits for the answer."""
-        done, answer = threading.Event(), {}
-        GLib.idle_add(self._show_password_dialog, done, answer)
-        done.wait()
-        return answer.get("password")
-
-    def _show_password_dialog(self, done, answer):
+    def _ask_password(self, callback):
+        """Show the password dialog, then call callback(password), or callback(None) if cancelled."""
         entry = Gtk.PasswordEntry(show_peek_icon=True, activates_default=True)
         dialog = Adw.AlertDialog.new("Authentication Required", "Enter your password to run commands with sudo.")
         dialog.set_extra_child(entry)
@@ -619,14 +610,8 @@ class Window(Adw.ApplicationWindow):
         dialog.set_response_appearance("ok", Adw.ResponseAppearance.SUGGESTED)
         dialog.set_default_response("ok")
         dialog.set_close_response("cancel")
-
-        def on_response(_d, response):
-            if response == "ok":
-                answer["password"] = entry.get_text()
-            done.set()
-        dialog.connect("response", on_response)
+        dialog.connect("response", lambda _d, response: callback(entry.get_text() if response == "ok" else None))
         dialog.present(self)
-        return GLib.SOURCE_REMOVE
 
     def _prompt_pending(self):
         """Opened from a notification: go straight to the confirmation that is waiting."""
