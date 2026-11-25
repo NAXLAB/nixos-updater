@@ -14,6 +14,7 @@ let
     auto_update = cfg.autoUpdate;
     auto_build = cfg.autoBuild;
     check_frequency = cfg.checkFrequency;
+    check_time = cfg.checkTime;
     directory = cfg.directory;
   };
 in
@@ -50,6 +51,16 @@ in
       type = lib.types.nullOr (lib.types.enum [ "daily" "weekly" "monthly" ]);
       default = null;
       description = "How often the background check runs. null leaves the choice to the app.";
+    };
+
+    checkTime = lib.mkOption {
+      type = lib.types.nullOr (lib.types.strMatching "([01][0-9]|2[0-3]):[0-5][0-9]");
+      default = null;
+      example = "03:00";
+      description = ''
+        Time of day (HH:MM, 24 h) from which the background check may run. The timer only wakes up every
+        timerInterval, so the check starts at the first wake-up at or after this time. null leaves it to the app.
+      '';
     };
 
     directory = lib.mkOption {

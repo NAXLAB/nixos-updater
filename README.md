@@ -15,13 +15,13 @@ NixOS module (installs the app, plus an optional background timer):
     programs.nixos-updater = {
       enable = true;
       # optional; anything you set here is fixed and greyed out in the window:
-      # autoUpdate = true;  autoBuild = true;  checkFrequency = "daily";  # daily | weekly | monthly  directory = "/home/you/nixos-config";
+      # autoUpdate = true;  autoBuild = true;  checkFrequency = "daily";  checkTime = "03:00";  directory = "/home/you/nixos-config";
     };
 
 ## Where things live
 | File | What it is |
 |---|---|
-| `nixos_updater/config.py` | Settings (JSON in `~/.config/nixos-updater/`), default commands, schedules |
+| `nixos_updater/config.py` | Settings (JSON in `~/.config/nixos-updater/`), schedules |
 | `nixos_updater/engine.py` | No GTK. Reads flake.lock/generation/kernel, runs the pipeline on a worker thread |
 | `nixos_updater/runner.py` | The detached job runner (`--run`, started by the window). Runs the engine, publishes its state, and brings the next step to you if the window is closed |
 | `nixos_updater/remote.py` | The window's view of the engine: starts/cancels the runner and polls its state |
@@ -38,14 +38,20 @@ NixOS module (installs the app, plus an optional background timer):
   Switch dialog: *Switch now* / *On next boot* (rewrites `nixos-rebuild switch` to `boot`) / *Not now*.
 - **"Updated" inputs** = flake.lock differs from `~/.local/state/nixos-updater/flake.lock.switched`,
   a copy taken after every successful switch (the first run assumes your current lock is what you're running).
-  **Roll Back** restores that copy (default command: `sudo cp <snapshot> flake.lock`).
+  **Roll Back** restores that copy (you set the command, e.g. `cp ~/.local/state/nixos-updater/flake.lock.switched flake.lock`).
 - **sudo**: there is no terminal, so commands run under bash with `sudo` redefined as `sudo -S -p ""`.
   The app asks for your password once in a dialog, keeps it in memory only, and feeds it on stdin.
   Wrong password → it asks again next run.
-- Edited commands are stored; un-edited ones follow the working directory and hostname.
+- **Commands:** there are no built-in commands; you enter one for each step under *Update Pipeline* (an empty step
+  fails with a message saying so). Example: `nix flake update`, `sudo nixos-rebuild build --flake .#host`,
+  `sudo nixos-rebuild switch --flake .#host`.
+- **Passwords:** only steps whose command contains `sudo` need one. A step like `nix flake update` that only edits
+  `flake.lock` needs write access to your flake directory but no password. If *Build After Updating* is on and your
+  build command uses `sudo`, a check asks for the password up front.
 - **Garbage collection** runs after a successful switch when it's due (`sudo nix-collect-garbage --delete-older-than Nd`).
 - **Background checks** (`--scheduled`, run by the module's user timer every hour): the app exits at once unless a
-  check is due per Update Frequency. If it is, it runs with **no window**: update, then build if *Build After Updating*
+  check is due per Update Frequency and Update Time (it runs once per period, at the first timer wake-up at or after
+  that time). If it is, it runs with **no window**: update, then build if *Build After Updating*
   is on. Then it sends a notification (silent if nothing changed): "Ready to switch", "Flake updated", or
   "Update failed". Clicking it opens the window on the confirm-switch dialog, or on "Rebuild & Switch?" if only the update ran (`--prompt`). With *Build After Updating* off, the background run only updates `flake.lock` (no password needed); the build and switch happen in the window, with your password.
   It never switches by itself.

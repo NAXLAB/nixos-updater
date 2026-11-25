@@ -5,7 +5,8 @@ generated from the working directory, so changing the directory updates them.
 """
 import json
 import os
-import socket
+import re
+from datetime import datetime
 import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
@@ -26,22 +27,19 @@ GC_FREQUENCIES = ["daily", "weekly", "monthly"]
 GC_DAYS = [7, 14, 30, 60, 90]
 
 
-def default_commands(directory):
-    flake = f"{directory}#{socket.gethostname()}"
-    return {
-        "update": "sudo nix flake update",
-        "build": f"sudo nixos-rebuild build --flake {flake}",
-        "switch": f"sudo nixos-rebuild switch --flake {flake}",
-        "rollback": f"sudo cp {LOCK_SNAPSHOT} flake.lock",
-    }
+# The pipeline steps. They have no built-in commands: you enter your own under "Update Pipeline".
+COMMAND_KEYS = ("update", "build", "switch", "rollback")
+CHECK_TIMES = [f"{h:02d}:00" for h in range(24)]   # on the hour: the timer wakes up hourly
+PERIOD_DAYS = {"daily": 1, "weekly": 7, "monthly": 30}
 
 
 @dataclass
 class Config:
     directory: str = str(Path.home() / "nixos-config")
-    custom: dict = field(default_factory=dict)   # key -> command, only edited ones
+    custom: dict = field(default_factory=dict)   # step -> command ("update", "build", "switch", "rollback")
     auto_update: bool = True                     # run the background check on the schedule below
     check_frequency: str = "weekly"
+    check_time: str = "03:00"                    # time of day the background check may start (HH:MM)
     auto_build: bool = True                      # build as soon as an update finds changes
     gc_enabled: bool = False
     gc_frequency: str = "weekly"
@@ -57,15 +55,22 @@ class Config:
 
     # -- commands ---------------------------------------------------------
     def command(self, key):
-        return self.custom.get(key) or default_commands(self.directory)[key]
+        return self.custom.get(key, "")
 
     def gc_command(self):
         return f"sudo nix-collect-garbage --delete-older-than {self.gc_days}d"
 
     # -- schedules --------------------------------------------------------
-    def check_due(self):
-        period = PERIODS.get(self.check_frequency)
-        return self.auto_update and bool(period) and time.time() - self.last_check >= period
+    def check_due(self, now=None):
+        """Due once per period, on or after check_time. Later is fine (laptop was off at 03:00): the next
+        timer tick after the time has passed still runs it."""
+        days = PERIOD_DAYS.get(self.check_frequency)
+        if not self.auto_update or not days:
+            return False
+        now = now or datetime.now()
+        if self.last_check and (now.date() - datetime.fromtimestamp(self.last_check).date()).days < days:
+            return False
+        return now.strftime("%H:%M") >= self.check_time
 
     def gc_due(self):
         return self.gc_enabled and time.time() - self.last_gc >= PERIODS[self.gc_frequency]
@@ -89,6 +94,8 @@ class Config:
         cfg.managed_keys = frozenset(k for k in managed if k in known)
         if cfg.check_frequency not in CHECK_FREQUENCIES:   # e.g. "manual" from an older version
             cfg.check_frequency = "weekly"
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(cfg.check_time)):
+            cfg.check_time = "03:00"
         return cfg
 
     def save(self):

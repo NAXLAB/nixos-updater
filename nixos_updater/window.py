@@ -15,7 +15,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, GObject, Gtk, Pango  # noqa: E402
 
-from .config import CHECK_FREQUENCIES, GC_DAYS, GC_FREQUENCIES, default_commands  # noqa: E402
+from .config import CHECK_FREQUENCIES, CHECK_TIMES, GC_DAYS, GC_FREQUENCIES  # noqa: E402
 from . import runstate  # noqa: E402
 from .remote import Remote  # noqa: E402
 
@@ -352,25 +352,32 @@ class Window(Adw.ApplicationWindow):
             self.cfg.save()
         self.freq_row = combo_row("Update Frequency", [f.capitalize() for f in CHECK_FREQUENCIES],
                                   CHECK_FREQUENCIES.index(self.cfg.check_frequency), set_freq)
+        hour = int(self.cfg.check_time[:2])
+        self.time_row = combo_row("Update Time", CHECK_TIMES, hour, self._set_check_time)
         auto_build = Adw.SwitchRow(title="Build After Updating", active=self.cfg.auto_build,
                                    subtitle="Start building as soon as an update finds changes")
         auto_build.connect("notify::active", self._set_auto_build)
 
         for row, key in ((self.auto_update_row, "auto_update"), (self.freq_row, "check_frequency"),
-                         (auto_build, "auto_build")):
+                         (self.time_row, "check_time"), (auto_build, "auto_build")):
             self._lock_if_managed(row, key)
             group.add(row)
-        self._update_freq_sensitivity()
+        self._update_schedule_sensitivity()
         return group
 
     def _set_auto_update(self, row, _param):
         self.cfg.auto_update = row.get_active()
         self.cfg.save()
-        self._update_freq_sensitivity()
+        self._update_schedule_sensitivity()
 
-    def _update_freq_sensitivity(self):
-        """The frequency only matters while automatic updates are on (and isn't fixed by the module)."""
-        self.freq_row.set_sensitive(self.cfg.auto_update and not self.cfg.is_managed("check_frequency"))
+    def _set_check_time(self, index):
+        self.cfg.check_time = CHECK_TIMES[index]
+        self.cfg.save()
+
+    def _update_schedule_sensitivity(self):
+        """Frequency and time only matter while automatic updates are on (and aren't fixed by the module)."""
+        for row, key in ((self.freq_row, "check_frequency"), (self.time_row, "check_time")):
+            row.set_sensitive(self.cfg.auto_update and not self.cfg.is_managed(key))
 
     def _set_auto_build(self, row, _param):
         self.cfg.auto_build = row.get_active()
@@ -398,10 +405,6 @@ class Window(Adw.ApplicationWindow):
     def _apply_directory(self, *_):
         self.cfg.directory = self.dir_row.get_text().strip()
         self.cfg.save()
-        defaults = default_commands(self.cfg.directory)   # un-edited commands follow the directory
-        for key, (row, _img, _reset) in self.cmd_rows.items():
-            if key not in self.cfg.custom:
-                row.set_text(defaults[key])
         self.engine.refresh()
         self.render()
 
@@ -410,8 +413,8 @@ class Window(Adw.ApplicationWindow):
     # ====================================================================
     def _build_pipeline(self):
         group = Adw.PreferencesGroup(title="Update Pipeline",
-                                     description="Commands run with bash in the working directory. "
-                                                 "`sudo` asks for your password in a dialog.")
+                                     description="Enter the command for each step; they run with bash in the "
+                                                 "directory above. `sudo` asks for your password in a dialog.")
         self.cmd_rows = {}
         group.add(self._build_directory())
         for key, title in PIPELINE:
@@ -421,7 +424,7 @@ class Window(Adw.ApplicationWindow):
     def _command_row(self, group, key, title, extra_suffix=None):
         row = Adw.EntryRow(title=title, text=self.cfg.command(key), show_apply_button=True)
         status = Gtk.Image(visible=False)
-        reset = icon_button("edit-undo-symbolic", "Reset to default", lambda _b: self._reset_command(key))
+        reset = icon_button("edit-clear-symbolic", "Clear command", lambda _b: self._reset_command(key))
         reset.set_visible(key in self.cfg.custom)
         if extra_suffix:
             row.add_suffix(extra_suffix)
@@ -432,7 +435,7 @@ class Window(Adw.ApplicationWindow):
         return row, status, reset
 
     def _save_command(self, key, text):
-        if not text or text == default_commands(self.cfg.directory)[key]:
+        if not text:
             self.cfg.custom.pop(key, None)
         else:
             self.cfg.custom[key] = text

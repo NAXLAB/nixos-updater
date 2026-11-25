@@ -167,6 +167,18 @@ class RemoteTests(RunnerBase):
         self.assertIsNone(r.s.running)
         self.assertIsNone(runstate.read())
 
+    def test_password_is_only_needed_when_a_step_uses_sudo(self):
+        self.cfg.custom = {"update": "nix flake update", "build": "sudo nixos-rebuild build",
+                           "switch": "sudo nixos-rebuild switch", "rollback": "cp a b"}
+        r = self.remote()
+        self.cfg.auto_build = False
+        self.assertFalse(r._needs_sudo("check"))      # update only
+        self.assertFalse(r._needs_sudo("rollback"))
+        self.assertTrue(r._needs_sudo("switch"))
+        self.assertTrue(r._needs_sudo("rebuild"))
+        self.cfg.auto_build = True
+        self.assertTrue(r._needs_sudo("check"))       # a check that also builds needs the build's sudo
+
     def test_dead_runner_is_noticed(self):
         dead = subprocess.Popen(["true"])
         dead.wait()

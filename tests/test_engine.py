@@ -1,5 +1,6 @@
 """GTK-free tests: python -m unittest discover tests"""
 import json, os, stat, sys, tempfile, time, unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 
 TMP = tempfile.mkdtemp()
@@ -248,10 +249,38 @@ class Tests(Base):
         self.cfg.save()
         c = config.Config.load()
         self.assertEqual(c.command("update"), "x")
-        self.assertIn("nixos-rebuild build --flake", c.command("build"))
-        self.assertTrue(config.Config(check_frequency="monthly").check_due())
-        self.assertFalse(config.Config(check_frequency="monthly", auto_update=False).check_due())
+        self.assertEqual(c.command("build"), "")   # no built-in commands
+        noon = datetime(2026, 11, 24, 12, 0)
+        self.assertTrue(config.Config(check_frequency="monthly").check_due(noon))
+        self.assertFalse(config.Config(check_frequency="monthly", auto_update=False).check_due(noon))
         self.assertFalse(config.Config(check_frequency="weekly", last_check=time.time()).check_due())
+
+    def test_check_due_respects_time_of_day(self):
+        day = datetime(2026, 11, 24)
+        yesterday = (day - timedelta(days=1)).replace(hour=3).timestamp()
+        cfg = config.Config(check_frequency="daily", check_time="13:00", last_check=yesterday)
+        self.assertFalse(cfg.check_due(day.replace(hour=12, minute=59)))
+        self.assertTrue(cfg.check_due(day.replace(hour=13)))
+        self.assertTrue(cfg.check_due(day.replace(hour=22)))     # late is fine (laptop was off)
+        cfg.last_check = day.replace(hour=13, minute=5).timestamp()
+        self.assertFalse(cfg.check_due(day.replace(hour=22)))    # already ran today
+        weekly = config.Config(check_frequency="weekly", check_time="03:00",
+                               last_check=(day - timedelta(days=5)).timestamp())
+        self.assertFalse(weekly.check_due(day.replace(hour=12)))
+        weekly.last_check = (day - timedelta(days=7)).timestamp()
+        self.assertTrue(weekly.check_due(day.replace(hour=12)))
+
+    def test_bad_time_in_config_falls_back(self):
+        config.CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        config.CONFIG_FILE.write_text(json.dumps({"check_time": "25:99"}))
+        self.assertEqual(config.Config.load().check_time, "03:00")
+
+    def test_blank_command_is_a_clear_error(self):
+        self.run_job("rebuild")   # no commands configured
+        s = self.eng.s
+        self.assertEqual(s.phase(), "error")
+        self.assertIn("No build command set", s.error)
+        self.assertEqual(s.steps["build"], "failed")
 
 
 def shq(s):

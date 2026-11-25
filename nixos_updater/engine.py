@@ -354,6 +354,9 @@ class Engine:
         cmd = self.cfg.gc_command() if key == "gc" else self.cfg.command(key)
         if boot:
             cmd = cmd.replace("nixos-rebuild switch", "nixos-rebuild boot")
+        if not cmd.strip():
+            s.steps[key] = "failed"
+            raise StepFailed(f"No {key} command set. Enter one under Update Pipeline")
         s.running, s.steps[key] = key, "running"
         s.log.append(f"$ {cmd}")
         self.notify()
